@@ -1,0 +1,4 @@
+/Users/ghostgloomy/GitHub/CMake_tn_fnds/build/CMakeFiles/rebuild_cache.dir
+/Users/ghostgloomy/GitHub/CMake_tn_fnds/build/CMakeFiles/edit_cache.dir
+/Users/ghostgloomy/GitHub/CMake_tn_fnds/build/CMakeFiles/CMake_tn_fnds.dir
+/Users/ghostgloomy/GitHub/CMake_tn_fnds/build/CMakeFiles/WORLD.dir

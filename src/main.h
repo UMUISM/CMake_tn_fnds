@@ -23,6 +23,8 @@ typedef uint32_t DWORD;
 // 70 Hzにすると4096点必要になる．
 // DEFAULT_F0は，0.0.4での新機能．調整の余地はあるが，暫定的に決定する．
 
+double* wavread(char* filename, int* fs, int* Nbit, int* waveLength, int* offset, int* endbr);
+
 // F0推定法 DIO : Distributed Inline-filter Operation
 void dio(double *x, int xLen, int fs, double framePeriod, double *timeAxis, double *f0);
 

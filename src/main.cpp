@@ -1,204 +1,19 @@
-// UTAU用音声合成エンジン『tn_fnds』 version 0.0.6    2012/3/31
-//
-// このプログラムは森勢将雅氏のWORLD版UTAU合成エンジン『エターナルフォースブリサンプラー 
-// ジェントリー・ウィープス　〜相手は死ぬ，俺も死ぬ〜』(EFB-GW)をカスタマイズし、連続音や
-// 子音速度、一部のフラグに対応させたものです。
-// 作成に当たり、飴屋／菖蒲氏のworld4utauのソースも流用させていただきました。
-//
-// ---以下原本のコメント
-//
-// エターナルフォースブリサンプラー ジェントリー・ウィープス　〜相手は死ぬ，俺も死ぬ〜
-// ネタではじめたWORLD版UTAU合成エンジンです．WORLD 0.0.4をガンガン変えているので，
-// このプログラムはWORLDとは別物だと思ったほうが良いです．
-// プラチナの数字は千分率での純度を表していて，850以上がプラチナと認められる．
-// よってPt100というのは，プラチナとはいえない別の何か（本プログラムにおける新機能）です．
-
+#include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
-#include <cassert>
 #include <iostream>
-#include <cmath>
+
 #include "main.h"
 
-
-// F0軌跡の要素数を得る（事前にユーザがメモリ確保できるように）
-// framePeriod の単位はmsec
 int getFFTLengthForStar(int fs) {
-    return (int) pow(2.0, 1.0 + (int) (log(3.0 * fs / FLOOR_F0 + 1) / log(2.0)));
-}
-
-
-/* wavread関数の移植 */
-double *wavread(char *filename, int *fs, int *Nbit, int *waveLength, int *offset, int *endbr) {
-    FILE *fp;
-    char dataCheck[5]; // 少し多めに
-    unsigned char forIntNumber[4];
-    double tmp, signBias, zeroLine;
-    short int channel;
-    int quantizationByte;
-    double *waveForm;
-
-    dataCheck[4] = '\0'; // 文字列照合のため，最後に終了文字を入れる．
-//	fp = fopen(filename, "rb");
-    fp = fopen(filename, "rb");
-    if (nullptr == fp) {
-        printf("ファイルのロードに失敗\n");
-        return nullptr;
-    }
-    //ヘッダのチェック
-    size_t result =
-            fread(dataCheck, sizeof(char), 4, fp); // "RIFF"
-    assert(result == 4);
-    if (0 != strcmp(dataCheck, "RIFF")) {
-        fclose(fp);
-        printf("ヘッダRIFFが不正\n");
-        return nullptr;
-    }
-    fseek(fp, 4, SEEK_CUR); // 4バイト飛ばす
-    result =
-            fread(dataCheck, sizeof(char), 4, fp); // "WAVE"
-    assert(result == 4);
-    if (0 != strcmp(dataCheck, "WAVE")) {
-        fclose(fp);
-        printf("ヘッダWAVEが不正\n");
-        return nullptr;
-    }
-    result =
-            fread(dataCheck, sizeof(char), 4, fp); // "fmt "
-    assert(result == 4);
-    if (0 != strcmp(dataCheck, "fmt ")) {
-        fclose(fp);
-        printf("ヘッダfmt が不正\n");
-        return nullptr;
-    }
-    result =
-            fread(dataCheck, sizeof(char), 4, fp); //1 0 0 0
-    assert(result == 4);
-    if (!(16 == dataCheck[0] && 0 == dataCheck[1] && 0 == dataCheck[2] && 0 == dataCheck[3])) {
-        fclose(fp);
-        printf("ヘッダfmt (2)が不正\n");
-        return nullptr;
-    }
-    result =
-            fread(dataCheck, sizeof(char), 2, fp); //1 0
-    assert(result == 2);
-    if (!(1 == dataCheck[0] && 0 == dataCheck[1])) {
-        fclose(fp);
-        printf("フォーマットIDが不正\n");
-        return nullptr;
-    }
-    /*
-result =
-    fread(dataCheck, sizeof(char), 2, fp); //1 0
-assert(result == 2);
-    if(!(1 == dataCheck[0] && 0 == dataCheck[1]))
-    {
-        fclose(fp);
-        printf("ステレオには対応していません\n");
-        return nullptr;
-    }
-    */
-    //チャンネル
-    result =
-            fread(&channel, sizeof(short int), 1, fp);
-    assert(result == 1);
-
-    // サンプリング周波数
-    result =
-            fread(forIntNumber, sizeof(char), 4, fp);
-    assert(result == 4);
-    *fs = 0;
-    for (int i = 3; i >= 0; i--) {
-        *fs = *fs * 256 + forIntNumber[i];
-    }
-    // 量子化ビット数
-    fseek(fp, 6, SEEK_CUR); // 6バイト飛ばす
-    result =
-            fread(forIntNumber, sizeof(char), 2, fp);
-    assert(result == 2);
-    *Nbit = forIntNumber[0];
-    // ヘッダ
-    int dummy;
-    result =
-            fread(dataCheck, sizeof(char), 4, fp); // "data"
-    assert(result == 4);
-    while (0 != strcmp(dataCheck, "data")) {
-        result =
-                fread(&dummy, sizeof(char), 4, fp);
-        assert(result == 4);
-        fseek(fp, dummy, SEEK_CUR); // 無関係なチャンクを読み飛ばす
-        result =
-                fread(dataCheck, sizeof(char), 4, fp); // "data"
-        assert(result == 4);
-//		fclose(fp);
-//		printf("ヘッダdataが不正\n");
-//		return nullptr;
-    }
-    // サンプル点の数
-    result =
-            fread(forIntNumber, sizeof(char), 4, fp); // "data"
-    assert(result == 4);
-    *waveLength = 0;
-    for (int i = 3; i >= 0; i--) {
-        *waveLength = *waveLength * 256 + forIntNumber[i];
-    }
-    *waveLength /= (*Nbit / 8 * channel);
-
-    if (*endbr < 0) // 負の場合はoffsetからの距離
-    {
-        *endbr = (*waveLength * 1000 / *fs) - (*offset - *endbr);
-    }
-
-    int st, ed;
-    st = max(0, min(*waveLength - 1, (int) ((*offset - 100) * *fs / 1000)));
-    ed = max(0, min(*waveLength - 1, *waveLength - (int) (max(0, *endbr - 100) * *fs / 1000)));
-    *endbr = (ed * 1000 / *fs) - ((*waveLength * 1000 / *fs) - *endbr);
-    *offset = *offset - (st * 1000 / *fs);
-    *waveLength = (ed - st + 1);
-
-    // 波形を取り出す
-    waveForm = (double *) malloc(sizeof(double) * *waveLength);
-    if (waveForm == nullptr) return nullptr;
-
-    quantizationByte = *Nbit / 8;
-    zeroLine = pow(2.0, *Nbit - 1);
-//	for(int i = 0;i < *waveLength;i++)
-
-    fseek(fp, st * quantizationByte * channel, SEEK_CUR);  //スタート位置まで読み飛ばす
-
-    unsigned char *wavbuff;
-    wavbuff = (unsigned char *) malloc(sizeof(char) * *waveLength * quantizationByte * channel);
-    result =
-            fread(wavbuff, sizeof(char), *waveLength * quantizationByte * channel, fp); // 全部メモリに読み込む
-    assert(result == *waveLength * quantizationByte * channel);
-    int seekindex;
-
-    for (int i = 0; i < *waveLength; i++) {
-        seekindex = i * quantizationByte * channel;
-        signBias = 0.0;
-        tmp = 0.0;
-        // 符号の確認
-        if (wavbuff[seekindex + quantizationByte - 1] >= 128) {
-            signBias = pow(2.0, *Nbit - 1);
-            wavbuff[seekindex + quantizationByte - 1] = wavbuff[seekindex + quantizationByte - 1] & 0x7F;
-        }
-        // データの読み込み
-        for (int j = quantizationByte - 1; j >= 0; j--) {
-            tmp = tmp * 256.0 + (double) (wavbuff[seekindex + j]);
-        }
-        waveForm[i] = (double) ((tmp - signBias) / zeroLine);
-
-    }
-    // 成功
-    free(wavbuff);
-    fclose(fp);
-    return waveForm;
+    return (int)pow(2.0, 1.0 + (int)(log(3.0 * fs / FLOOR_F0 + 1) / log(2.0)));
 }
 
 
 inline DWORD timeGetTime() {
-    return (DWORD) time(nullptr) * 1000;
+    return (DWORD)time(nullptr) * 1000;
 }
 
 // 13引数のうち
@@ -244,7 +59,8 @@ double getFreqAvg(const double f0[], int tLen) {
             base_value += r;
         }
     }
-    if (base_value > 0) freq_avg /= base_value;
+    if (base_value > 0)
+        freq_avg /= base_value;
     return freq_avg;
 }
 
@@ -266,7 +82,7 @@ int get64(int c) {
 }
 
 //飴屋／菖蒲氏のworld4utau.cppから移植
-int decpit(char *str, int *dst, int cnt) {
+int decpit(char* str, int* dst, int cnt) {
     int len = 0;
     int i, n = 0;
     int k = 0, num, ii;
@@ -279,11 +95,13 @@ int decpit(char *str, int *dst, int cnt) {
                 for (ii = 0; ii < num && k < cnt; ii++) {
                     dst[k++] = n;
                 }
-                while (str[i] != '#' && str[i] != 0) i++;
+                while (str[i] != '#' && str[i] != 0)
+                    i++;
                 i--;
             } else {
                 n = get64(str[i]) * 64 + get64(str[i + 1]);
-                if (n > 2047) n -= 4096;
+                if (n > 2047)
+                    n -= 4096;
                 if (k < cnt) {
                     dst[k++] = n;
                 }
@@ -293,14 +111,13 @@ int decpit(char *str, int *dst, int cnt) {
     return len;
 }
 
-
-void equalizingPicth(double *f0, int tLen, const char *scaleParam, int modulationParam, int flag_t) {
+void equalizingPicth(double* f0, int tLen, const char* scaleParam, int modulationParam, int flag_t) {
     int i;
     // まず平均値を調べる．
     double averageF0;
     double modulation;
 
-    modulation = (double) modulationParam / 100.0;
+    modulation = (double)modulationParam / 100.0;
 
     averageF0 = getFreqAvg(f0, tLen);
 
@@ -310,34 +127,35 @@ void equalizingPicth(double *f0, int tLen, const char *scaleParam, int modulatio
     int bias = 0;
 
     // 目標とする音階の同定
-    if (scaleParam[1] == '#') bias = 1;
+    if (scaleParam[1] == '#')
+        bias = 1;
 
     switch (scaleParam[0]) {
-        case 'C':
-            scale = -9 + bias;
-            break;
-        case 'D':
-            scale = -7 + bias;
-            break;
-        case 'E':
-            scale = -5;
-            break;
-        case 'F':
-            scale = -4 + bias;
-            break;
-        case 'G':
-            scale = -2 + bias;
-            break;
-        case 'A':
-            scale = bias;
-            break;
-        case 'B':
-            scale = 2;
-            break;
+    case 'C':
+        scale = -9 + bias;
+        break;
+    case 'D':
+        scale = -7 + bias;
+        break;
+    case 'E':
+        scale = -5;
+        break;
+    case 'F':
+        scale = -4 + bias;
+        break;
+    case 'G':
+        scale = -2 + bias;
+        break;
+    case 'A':
+        scale = bias;
+        break;
+    case 'B':
+        scale = 2;
+        break;
     }
     octave = scaleParam[1 + bias] - '0' - 4;
-    targetF0 = 440 * pow(2.0, (double) octave) * pow(2.0, (double) scale / 12.0);
-    targetF0 *= pow(2, (double) flag_t / 120);
+    targetF0 = 440 * pow(2.0, (double)octave) * pow(2.0, (double)scale / 12.0);
+    targetF0 *= pow(2, (double)flag_t / 120);
 
     double tmp;
 
@@ -357,13 +175,13 @@ void equalizingPicth(double *f0, int tLen, const char *scaleParam, int modulatio
     }
 }
 
-int stretchTime(const double *f0, int tLen, int fftl, const int *residualSpecgramIndex,
-                double *f02, int tLen2, int *residualSpecgramIndex2, int os, int st, int ed, int Length2, double vRatio, int mode) {
+int stretchTime(const double* f0, int tLen, int fftl, const int* residualSpecgramIndex,
+                double* f02, int tLen2, int* residualSpecgramIndex2, int os, int st, int ed, int Length2, double vRatio, int mode) {
     int i, k;
     int st2, ed2;
 
-    st2 = min(tLen2, (int) ((st - os) * vRatio + 0.5));  //伸縮後の子音部フレーム
-    ed2 = min(tLen2, (int) (Length2 + 0.5));     //合成後のサンプル数
+    st2 = min(tLen2, (int)((st - os) * vRatio + 0.5));  //伸縮後の子音部フレーム
+    ed2 = min(tLen2, (int)(Length2 + 0.5));             //合成後のサンプル数
     // 前半
     for (i = 0; i < st2; i++) {
         k = max(0, min(tLen - 1, int(i / vRatio) + os));
@@ -375,13 +193,15 @@ int stretchTime(const double *f0, int tLen, int fftl, const int *residualSpecgra
         i = st2;
         while (i < ed2) {
             for (k = st; k < ed - 2; k++) {
-                if (i > ed2 - 1) break;
+                if (i > ed2 - 1)
+                    break;
                 f02[i] = f0[k];
                 residualSpecgramIndex2[i] = residualSpecgramIndex[k];
                 i++;
             }
             for (k = ed - 1; k > st; k--) {
-                if (i > ed2 - 1) break;
+                if (i > ed2 - 1)
+                    break;
                 f02[i] = f0[k];
                 residualSpecgramIndex2[i] = residualSpecgramIndex[k];
                 i++;
@@ -389,12 +209,12 @@ int stretchTime(const double *f0, int tLen, int fftl, const int *residualSpecgra
         }
     } else {
         // 後半（UTAU式引き伸ばし）
-        if (ed2 - st2 > ed - st)//引き伸ばし
+        if (ed2 - st2 > ed - st)  //引き伸ばし
         {
             double ratio;
-            ratio = (double) (ed - st) / (ed2 - st2);
+            ratio = (double)(ed - st) / (ed2 - st2);
             for (i = st2; i < ed2; i++) {
-                k = max(0, min(tLen - 1, (int) ((i - st2) * ratio + 0.5 + st)));
+                k = max(0, min(tLen - 1, (int)((i - st2) * ratio + 0.5 + st)));
                 f02[i] = f0[k];
                 residualSpecgramIndex2[i] = residualSpecgramIndex[k];
             }
@@ -410,12 +230,12 @@ int stretchTime(const double *f0, int tLen, int fftl, const int *residualSpecgra
     return ed2;
 }
 
-void f0Lpf(double *f0, int tLen, int flag_d) {
+void f0Lpf(double* f0, int tLen, int flag_d) {
     int i;
     int addcount = 0;
     double addvalue = 0;
-    double *newf0;
-    newf0 = (double *) malloc(sizeof(double) * tLen);
+    double* newf0;
+    newf0 = (double*)malloc(sizeof(double) * tLen);
     for (i = 0; i < min(tLen - 1, flag_d); i++) {
         if (f0[i] != 0.0) {
             addvalue += f0[i];
@@ -441,18 +261,19 @@ void f0Lpf(double *f0, int tLen, int flag_d) {
             newf0[i] = 0.0;
         }
     }
-    for (i = 0; i < tLen; i++) f0[i] = newf0[i];
+    for (i = 0; i < tLen; i++)
+        f0[i] = newf0[i];
 }
 
 //イコライジング用スペクトル作成
-void createWaveSpec(double *x, int xLen, int fftl, int equLen, fft_complex **waveSpecgram) {
+void createWaveSpec(double* x, int xLen, int fftl, int equLen, fft_complex** waveSpecgram) {
     int i, j;
 
-    double *waveBuff;
-    fft_plan wave_f_fft;                // fftセット
-    fft_complex *waveSpec;    // スペクトル
-    waveBuff = (double *) malloc(sizeof(double) * fftl);
-    waveSpec = (fft_complex *) malloc(sizeof(fft_complex) * fftl);
+    double* waveBuff;
+    fft_plan wave_f_fft;    // fftセット
+    fft_complex* waveSpec;  // スペクトル
+    waveBuff = (double*)malloc(sizeof(double) * fftl);
+    waveSpec = (fft_complex*)malloc(sizeof(fft_complex) * fftl);
     wave_f_fft = fft_plan_dft_r2c_1d(fftl, waveBuff, waveSpec, FFT_ESTIMATE);
 
     int offset;
@@ -462,7 +283,7 @@ void createWaveSpec(double *x, int xLen, int fftl, int equLen, fft_complex **wav
         //データをコピー
         for (j = 0; j < fftl; j++)
             waveBuff[j] = x[offset + j] *
-                          (0.5 - 0.5 * cos(2.0 * PI * (double) j / (double) fftl));//窓を掛ける;
+                          (0.5 - 0.5 * cos(2.0 * PI * (double)j / (double)fftl));  //窓を掛ける;
 
         //fft実行
         fft_execute(wave_f_fft);
@@ -477,21 +298,21 @@ void createWaveSpec(double *x, int xLen, int fftl, int equLen, fft_complex **wav
     fft_destroy_plan(wave_f_fft);
     free(waveBuff);
     free(waveSpec);
-
 }
 
 //スペクトルから波形を再構築
-void rebuildWave(double *x, int xLen, int fftl, int equLen, fft_complex **waveSpecgram) {
+void rebuildWave(double* x, int xLen, int fftl, int equLen, fft_complex** waveSpecgram) {
     int i, j;
-    double *waveBuff;
-    fft_plan wave_i_fft;                // fftセット
-    fft_complex *waveSpec;    // スペクトル
-    waveBuff = (double *) malloc(sizeof(double) * fftl);
-    waveSpec = (fft_complex *) malloc(sizeof(fft_complex) * fftl);
+    double* waveBuff;
+    fft_plan wave_i_fft;    // fftセット
+    fft_complex* waveSpec;  // スペクトル
+    waveBuff = (double*)malloc(sizeof(double) * fftl);
+    waveSpec = (fft_complex*)malloc(sizeof(fft_complex) * fftl);
     wave_i_fft = fft_plan_dft_c2r_1d(fftl, waveSpec, waveBuff, FFT_ESTIMATE);
 
     int offset;
-    for (i = 0; i < xLen; i++) x[i] = 0;
+    for (i = 0; i < xLen; i++)
+        x[i] = 0;
 
     for (i = 0; i < equLen; i++) {
         offset = i * fftl / 2;
@@ -502,57 +323,58 @@ void rebuildWave(double *x, int xLen, int fftl, int equLen, fft_complex **waveSp
             waveSpec[j][1] = waveSpecgram[i][j][1];
         }
 
-
         //fft実行
         fft_execute(wave_i_fft);
 
-        for (j = 0; j < fftl; j++) waveBuff[j] /= fftl;
+        for (j = 0; j < fftl; j++)
+            waveBuff[j] /= fftl;
 
         //データをコピー
-        for (j = 0; j < fftl; j++) x[offset + j] += waveBuff[j];
-
+        for (j = 0; j < fftl; j++)
+            x[offset + j] += waveBuff[j];
     }
 
     fft_destroy_plan(wave_i_fft);
     free(waveBuff);
     free(waveSpec);
-
 }
 
 //Bフラグ（息）を適用する
-void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **waveSpecgram, int equLen, int fftl, int flag_B) {
+void breath2(double* f0, int tLen, int fs, double* x, int xLen, fft_complex** waveSpecgram, int equLen, int fftl, int flag_B) {
     int i, j;
 
     //ノイズfftの準備
-    double *noiseData;
-    double *noiseBuff;
-    double *noise;
-    fft_plan noise_f_fft;                // fftセット
-    fft_plan noise_i_fft;                // fftセット
-    fft_complex *noiseSpec;    // スペクトル
+    double* noiseData;
+    double* noiseBuff;
+    double* noise;
+    fft_plan noise_f_fft;    // fftセット
+    fft_plan noise_i_fft;    // fftセット
+    fft_complex* noiseSpec;  // スペクトル
 
-    noiseData = (double *) malloc(sizeof(double) * xLen);
-    for (i = 0; i < xLen; i++) noiseData[i] = (double) rand() / RAND_MAX - 0.5;
-    noise = (double *) malloc(sizeof(double) * xLen);
-    for (i = 0; i < xLen; i++) noise[i] = 0.0;
-//	for(i=0;i < xLen; i++) noiseData[i] *= noiseData[i] * (noiseData[i] < 0)? -1 : 1;//ノイズの分布をいじる
-    noiseBuff = (double *) malloc(sizeof(double) * fftl);
-    noiseSpec = (fft_complex *) malloc(sizeof(fft_complex) * fftl);
+    noiseData = (double*)malloc(sizeof(double) * xLen);
+    for (i = 0; i < xLen; i++)
+        noiseData[i] = (double)rand() / RAND_MAX - 0.5;
+    noise = (double*)malloc(sizeof(double) * xLen);
+    for (i = 0; i < xLen; i++)
+        noise[i] = 0.0;
+    //	for(i=0;i < xLen; i++) noiseData[i] *= noiseData[i] * (noiseData[i] < 0)? -1 : 1;//ノイズの分布をいじる
+    noiseBuff = (double*)malloc(sizeof(double) * fftl);
+    noiseSpec = (fft_complex*)malloc(sizeof(fft_complex) * fftl);
     noise_f_fft = fft_plan_dft_r2c_1d(fftl, noiseBuff, noiseSpec, FFT_ESTIMATE);
     noise_i_fft = fft_plan_dft_c2r_1d(fftl, noiseSpec, noiseBuff, FFT_ESTIMATE);
 
     //wavefftの準備
-    fft_complex *waveSpec;    // スペクトル
-    waveSpec = (fft_complex *) malloc(sizeof(fft_complex) * fftl);
+    fft_complex* waveSpec;  // スペクトル
+    waveSpec = (fft_complex*)malloc(sizeof(fft_complex) * fftl);
 
     int offset;
     double volume;
 
     int SFreq, MFreq, EFreq;
 
-    SFreq = (int) (fftl * 1500 / fs);//ブレス開始周波数
-    MFreq = (int) (fftl * 5000 / fs);//ブレス開始周波数
-    EFreq = (int) (fftl * 20000 / fs);//ブレスの周波数帯
+    SFreq = (int)(fftl * 1500 / fs);   //ブレス開始周波数
+    MFreq = (int)(fftl * 5000 / fs);   //ブレス開始周波数
+    EFreq = (int)(fftl * 20000 / fs);  //ブレスの周波数帯
 
     double nowIndex;
     int sIndex, eIndex;
@@ -566,24 +388,24 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
         //データをコピー
         for (j = 0; j < fftl; j++)
             noiseBuff[j] = noiseData[offset + j] *
-                           (0.5 - 0.5 * cos(2.0 * PI * (double) j / (double) fftl));//窓を掛ける;
+                           (0.5 - 0.5 * cos(2.0 * PI * (double)j / (double)fftl));  //窓を掛ける;
 
         //fft実行
         fft_execute(noise_f_fft);
 
         //スペクトル包絡（超手抜き）
-        for (j = 0; j < fftl / 2 + 1; j++) waveSpec[j][0] = sqrt(waveSpecgram[i][j][0] * waveSpecgram[i][j][0] + waveSpecgram[i][j][1] * waveSpecgram[i][j][1]);
-        for (j = 0; j < fftl / 2 + 1; j++) waveSpec[j][0] = log10(waveSpec[j][0] + 0.00000001);//対数化
-        for (j = 0; j < fftl / 2 + 1; j++) waveSpec[j][1] = waveSpec[j][0];
+        for (j = 0; j < fftl / 2 + 1; j++)
+            waveSpec[j][0] = sqrt(waveSpecgram[i][j][0] * waveSpecgram[i][j][0] + waveSpecgram[i][j][1] * waveSpecgram[i][j][1]);
+        for (j = 0; j < fftl / 2 + 1; j++)
+            waveSpec[j][0] = log10(waveSpec[j][0] + 0.00000001);  //対数化
+        for (j = 0; j < fftl / 2 + 1; j++)
+            waveSpec[j][1] = waveSpec[j][0];
 
-        nowIndex = max(0.0, min((double) tLen - 1, (double) (offset + fftl / 2) / fs * 1000 / FRAMEPERIOD));
-        sIndex = min(tLen - 2, (int) nowIndex);
+        nowIndex = max(0.0, min((double)tLen - 1, (double)(offset + fftl / 2) / fs * 1000 / FRAMEPERIOD));
+        sIndex = min(tLen - 2, (int)nowIndex);
         eIndex = sIndex + 1;
 
-        nowF0 = (f0[sIndex] == 0 && f0[eIndex] == 0) ? DEFAULT_F0 :
-                (f0[sIndex] == 0) ? f0[eIndex] :
-                (f0[eIndex] == 0) ? f0[sIndex] :
-                (f0[eIndex] - f0[sIndex]) * (nowIndex - sIndex) + f0[sIndex];
+        nowF0 = (f0[sIndex] == 0 && f0[eIndex] == 0) ? DEFAULT_F0 : (f0[sIndex] == 0) ? f0[eIndex] : (f0[eIndex] == 0) ? f0[sIndex] : (f0[eIndex] - f0[sIndex]) * (nowIndex - sIndex) + f0[sIndex];
 
         specs = 0;
         hs = 0.0;
@@ -591,7 +413,7 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
         baion = 1;
         spece = 0;
         for (baion = 1; spece != fftl / 2 + 1; baion++) {
-            spece = min(fftl / 2 + 1, (int) ((double) fftl / fs * nowF0 * baion + 0.5));
+            spece = min(fftl / 2 + 1, (int)((double)fftl / fs * nowF0 * baion + 0.5));
             he = waveSpec[spece][1];
             for (j = specs; j < spece; j++) {
                 waveSpec[j][0] = (he - hs) / (spece - specs) * (j - specs) + hs;
@@ -600,7 +422,8 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
             hs = he;
         }
 
-        for (j = 0; j < fftl / 2 + 1; j++) waveSpec[j][0] = pow(10, waveSpec[j][0]);//振幅化
+        for (j = 0; j < fftl / 2 + 1; j++)
+            waveSpec[j][0] = pow(10, waveSpec[j][0]);  //振幅化
 
         //ノイズのスペクトルを変形
         for (j = 0; j < SFreq; j++) {
@@ -609,12 +432,12 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
         }
 
         for (; j < MFreq; j++) {
-            volume = waveSpec[j][0] * (0.5 - 0.5 * cos(PI * (j - SFreq) / (double) (MFreq - SFreq)));
+            volume = waveSpec[j][0] * (0.5 - 0.5 * cos(PI * (j - SFreq) / (double)(MFreq - SFreq)));
             noiseSpec[j][0] *= volume;
             noiseSpec[j][1] *= volume;
         }
         for (; j < EFreq; j++) {
-            volume = waveSpec[j][0] * (0.5 - 0.5 * cos(PI + PI * (j - MFreq) / (double) (EFreq - MFreq)));
+            volume = waveSpec[j][0] * (0.5 - 0.5 * cos(PI + PI * (j - MFreq) / (double)(EFreq - MFreq)));
             noiseSpec[j][0] *= volume;
             noiseSpec[j][1] *= volume;
         }
@@ -629,7 +452,8 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
 
         //逆fft
         fft_execute(noise_i_fft);
-        for (j = 0; j < fftl; j++) noiseBuff[j] /= fftl;
+        for (j = 0; j < fftl; j++)
+            noiseBuff[j] /= fftl;
 
         //窓を掛ける
         //	for(j = 0;j < fftl; j++) noiseBuff[j] *= 0.5 - 0.5*cos(2.0*PI*(double)j/(double)fftl);
@@ -641,9 +465,10 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
     }
 
     //ノイズを合成
-    double noiseRatio = max(0.0, (double) (flag_B - 50) / 50.0);
+    double noiseRatio = max(0.0, (double)(flag_B - 50) / 50.0);
     double waveRatio = 1 - noiseRatio;
-    for (i = 0; i < xLen; i++) x[i] = x[i] * waveRatio + noise[i] * noiseRatio;
+    for (i = 0; i < xLen; i++)
+        x[i] = x[i] * waveRatio + noise[i] * noiseRatio;
 
     //後処理
     fft_destroy_plan(noise_f_fft);
@@ -656,18 +481,18 @@ void breath2(double *f0, int tLen, int fs, double *x, int xLen, fft_complex **wa
 }
 
 //Oフラグ（声の強さ）
-void Opening(double *f0, int tLen, int fs, fft_complex **waveSpecgram, int equLen, int fftl, int flag_O) {
+void Opening(double* f0, int tLen, int fs, fft_complex** waveSpecgram, int equLen, int fftl, int flag_O) {
     int i, j;
-    double opn = (double) flag_O / 100.0;
-    int sFreq = (int) (fftl * 500 / fs);//制御周波数1
-    int eFreq = (int) (fftl * 2000 / fs);//制御周波数2
-    double sRatio = -10.0;//制御周波数1の振幅倍率デシベル
-    double eRatio = 10.0;//制御周波数2の振幅倍率デシベル
+    double opn = (double)flag_O / 100.0;
+    int sFreq = (int)(fftl * 500 / fs);   //制御周波数1
+    int eFreq = (int)(fftl * 2000 / fs);  //制御周波数2
+    double sRatio = -10.0;                //制御周波数1の振幅倍率デシベル
+    double eRatio = 10.0;                 //制御周波数2の振幅倍率デシベル
 
     //周波数ごとの音量マップ作成
     double volume;
-    double *volumeMap;
-    volumeMap = (double *) malloc(sizeof(double) * fftl / 2 + 1);
+    double* volumeMap;
+    volumeMap = (double*)malloc(sizeof(double) * fftl / 2 + 1);
 
     volume = pow(10, sRatio * opn / 20);
     for (j = 0; j < sFreq; j++) {
@@ -685,8 +510,9 @@ void Opening(double *f0, int tLen, int fs, fft_complex **waveSpecgram, int equLe
     //周波数ごとの音量を変更
     int f0Frame;
     for (i = 0; i < equLen; i++) {
-        f0Frame = max(0, min(tLen - 1, (int) ((double) ((i + 1) * fftl / 2) / fs * 1000 / FRAMEPERIOD + 0.5)));
-        if (f0[f0Frame] == 0.0) continue;
+        f0Frame = max(0, min(tLen - 1, (int)((double)((i + 1) * fftl / 2) / fs * 1000 / FRAMEPERIOD + 0.5)));
+        if (f0[f0Frame] == 0.0)
+            continue;
         for (j = 0; j < fftl / 2 + 1; j++) {
             waveSpecgram[i][j][0] *= volumeMap[j];
             waveSpecgram[i][j][1] *= volumeMap[j];
@@ -697,12 +523,12 @@ void Opening(double *f0, int tLen, int fs, fft_complex **waveSpecgram, int equLe
 }
 
 //bフラグ（子音（無声部）強調）
-void consonantAmp2(double *f0, double *volume, int tLen, int flag_b) {
+void consonantAmp2(double* f0, double* volume, int tLen, int flag_b) {
     int i;
-    int frameLen = 5;//平滑化するフレーム数（前後）
+    int frameLen = 5;  //平滑化するフレーム数（前後）
     int addCount = 0;
     double addVolume = 0;
-    double ratio = (double) flag_b / 20.0; //倍率　b=100 のとき5倍
+    double ratio = (double)flag_b / 20.0;  //倍率　b=100 のとき5倍
 
     for (i = 0; i < min(tLen, frameLen + 1); i++) {
         addCount++;
@@ -723,33 +549,34 @@ void consonantAmp2(double *f0, double *volume, int tLen, int flag_b) {
 }
 
 //gフラグ（ジェンダーファクターもどき）を適用する
-void gFactor(int pCount, int fftl, double **residualSpecgram, int *residualSpecgramLength, double gRatio) {
+void gFactor(int pCount, int fftl, double** residualSpecgram, int* residualSpecgramLength, double gRatio) {
     int i, j;
     double position;
     int sindex, eindex;
     int NewLength;
 
     for (i = 0; i < pCount - 1; i++) {
-        if (residualSpecgramLength[i] == 0.0) continue;
+        if (residualSpecgramLength[i] == 0.0)
+            continue;
 
-        NewLength = max(0, min(fftl - 1, (int) (residualSpecgramLength[i] / gRatio + 0.5)));
+        NewLength = max(0, min(fftl - 1, (int)(residualSpecgramLength[i] / gRatio + 0.5)));
         if (gRatio > 1) {
             for (j = 0; j < NewLength; j++) {
-                position = min((double) residualSpecgramLength[i] - 1.0001, (double) (j * gRatio));
-                sindex = (int) position;
+                position = min((double)residualSpecgramLength[i] - 1.0001, (double)(j * gRatio));
+                sindex = (int)position;
                 eindex = sindex + 1;
                 residualSpecgram[i][j] = residualSpecgram[i][sindex] +
-                                         (double) (residualSpecgram[i][eindex] - residualSpecgram[i][sindex]) *
-                                         (double) (position - sindex);
+                                         (double)(residualSpecgram[i][eindex] - residualSpecgram[i][sindex]) *
+                                             (double)(position - sindex);
             }
         } else {
             for (j = NewLength - 1; j >= 0; j--) {
-                position = min((double) residualSpecgramLength[i] - 1.0001, (double) (j * gRatio));
-                sindex = (int) position;
+                position = min((double)residualSpecgramLength[i] - 1.0001, (double)(j * gRatio));
+                sindex = (int)position;
                 eindex = sindex + 1;
                 residualSpecgram[i][j] = residualSpecgram[i][sindex] +
-                                         (double) (residualSpecgram[i][eindex] - residualSpecgram[i][sindex]) *
-                                         (double) (position - sindex);
+                                         (double)(residualSpecgram[i][eindex] - residualSpecgram[i][sindex]) *
+                                             (double)(position - sindex);
             }
         }
         residualSpecgramLength[i] = NewLength;
@@ -763,11 +590,12 @@ double FrqToPit(double Frq) {
 }
 
 //Aフラグ（ピッチ変化に合わせて音量を修正）
-void autoVolume(double *f0, int tLen, int fs, double *volume, int flag_A) {
+void autoVolume(double* f0, int tLen, int fs, double* volume, int flag_A) {
     int i;
 
     if (flag_A == 0) {
-        for (i = 0; i < tLen; i++) volume[i] = 1.0;
+        for (i = 0; i < tLen; i++)
+            volume[i] = 1.0;
         return;
     }
 
@@ -793,16 +621,17 @@ void autoVolume(double *f0, int tLen, int fs, double *volume, int flag_A) {
         }
         volume[i] = 1.0;
     }
-    if (f0[tLen - 1] != 0.0 && f0[tLen - 2] != 0.0) volume[tLen - 1] = volume[tLen - 2];
+    if (f0[tLen - 1] != 0.0 && f0[tLen - 2] != 0.0)
+        volume[tLen - 1] = volume[tLen - 2];
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     int i;
 
     double *x, *f0, *t, *y;
-    double **residualSpecgram;
-    int *residualSpecgramLength;
-    int *residualSpecgramIndex;
+    double** residualSpecgram;
+    int* residualSpecgramLength;
+    int* residualSpecgramIndex;
     int pCount;
     int fftl;
 
@@ -815,70 +644,73 @@ int main(int argc, char *argv[]) {
     }
 
     //Flags読込
-    char *cp;
-    int flag_B = 50;//BRE（息）成分
+    char* cp;
+    int flag_B = 50;  //BRE（息）成分
     if (argc > 5 && (cp = strchr(argv[5], 'B')) != 0) {
         sscanf(cp + 1, "%d", &flag_B);
         flag_B = max(0, min(100, flag_B));
     }
 
-    int flag_b = 0;//子音（無声部）の強さ
+    int flag_b = 0;  //子音（無声部）の強さ
     if (argc > 5 && (cp = strchr(argv[5], 'b')) != 0) {
         sscanf(cp + 1, "%d", &flag_b);
         flag_b = max(0, min(100, flag_b));
     }
 
-    int flag_t = 0;//tフラグ
+    int flag_t = 0;  //tフラグ
     if (argc > 5 && (cp = strchr(argv[5], 't')) != 0) {
         sscanf(cp + 1, "%d", &flag_t);
     }
 
-    double flag_g = 0.0;//gフラグ
+    double flag_g = 0.0;  //gフラグ
     double gRatio;
     if (argc > 5 && (cp = strchr(argv[5], 'g')) != 0) {
         sscanf(cp + 1, "%lf", &flag_g);
-        if (flag_g > 100) flag_g = 100;
-        if (flag_g < -100) flag_g = -100;
+        if (flag_g > 100)
+            flag_g = 100;
+        if (flag_g < -100)
+            flag_g = -100;
     }
     gRatio = pow(10, -flag_g / 200);
 
-    double flag_W = 0.0;//Wフラグ（周波数強制設定）F<0無声音  F=0無効  50>=F<=1000 指定の周波数に設定
-    double f0Rand = 0;//
+    double flag_W = 0.0;  //Wフラグ（周波数強制設定）F<0無声音  F=0無効  50>=F<=1000 指定の周波数に設定
+    double f0Rand = 0;    //
     if (argc > 5 && (cp = strchr(argv[5], 'W')) != 0) {
         sscanf(cp + 1, "%lf", &flag_W);
-        if (flag_W > 1000) flag_W = 1000;
+        if (flag_W > 1000)
+            flag_W = 1000;
         if ((flag_W < 50) && (flag_W > 0)) {
             f0Rand = flag_W / 50;
             flag_W = 0;
         }
-        if (flag_W < 0) flag_W = -1;
+        if (flag_W < 0)
+            flag_W = -1;
     }
-    int flag_d = 5;//独自フラグ　DIOのF0分析結果にLPFをかける 0~20 def 5
-//	if(argc > 5 && (cp = strchr(argv[5],'d')) != 0) //デフォルトから変更する必要が無いと感じたのでとりあえず無効
-//	{
-//		sscanf(cp+1, "%d", &flag_d);
-//		flag_d = max(0, min(20, flag_d));
-//	}
+    int flag_d = 5;  //独自フラグ　DIOのF0分析結果にLPFをかける 0~20 def 5
+                     //	if(argc > 5 && (cp = strchr(argv[5],'d')) != 0) //デフォルトから変更する必要が無いと感じたのでとりあえず無効
+                     //	{
+                     //		sscanf(cp+1, "%d", &flag_d);
+                     //		flag_d = max(0, min(20, flag_d));
+                     //	}
 
-    int flag_A = 0;//独自フラグ　ピッチ変化に合わせて音量を修正
+    int flag_A = 0;  //独自フラグ　ピッチ変化に合わせて音量を修正
     if (argc > 5 && (cp = strchr(argv[5], 'A')) != 0) {
         sscanf(cp + 1, "%d", &flag_A);
         flag_A = max(0, min(100, flag_A));
     }
 
-    int flag_O = 0;//独自フラグ　声の強さ
+    int flag_O = 0;  //独自フラグ　声の強さ
     if (argc > 5 && (cp = strchr(argv[5], 'O')) != 0) {
         sscanf(cp + 1, "%d", &flag_O);
         flag_O = max(-100, min(100, flag_O));
     }
 
-    int flag_e = 0;//独自フラグ　引き伸ばし方法を変更する　デフォルトはループ式だが、指定するとUTAUと同じように引き伸ばす
+    int flag_e = 0;  //独自フラグ　引き伸ばし方法を変更する　デフォルトはループ式だが、指定するとUTAUと同じように引き伸ばす
     if (argc > 5 && (cp = strchr(argv[5], 'e')) != 0) {
         flag_e = 1;
     }
 
-
-    FILE *fp;
+    FILE* fp;
 
     int offset;
     int edLengthMsec;
@@ -897,16 +729,16 @@ int main(int argc, char *argv[]) {
     printf("File information\n");
     printf("Sampling : %d Hz %d Bit\n", fs, nbit);
     printf("Length %d [sample]\n", signalLen);
-    printf("Length %f [sec]\n", (double) signalLen / (double) fs);
+    printf("Length %f [sec]\n", (double)signalLen / (double)fs);
 
     // F0は何サンプル分あるかを事前に計算する．
     tLen = getSamplesForDIO(fs, signalLen, FRAMEPERIOD);
-    f0 = (double *) malloc(sizeof(double) * tLen);
-    t = (double *) malloc(sizeof(double) * tLen);
+    f0 = (double*)malloc(sizeof(double) * tLen);
+    t = (double*)malloc(sizeof(double) * tLen);
     // f0 estimation by DIO
     DWORD elapsedTime;
 
-    if (flag_W == 0)//Fフラグ　f0 強制設定
+    if (flag_W == 0)  //Fフラグ　f0 強制設定
     {
         printf("\nAnalysis\n");
         elapsedTime = timeGetTime();
@@ -920,7 +752,7 @@ int main(int argc, char *argv[]) {
     } else {
         for (i = 0; i < tLen; i++) {
             f0[i] = (flag_W == -1) ? 0.0 : flag_W;
-            t[i] = (double) i * FRAMEPERIOD / 1000.0;
+            t[i] = (double)i * FRAMEPERIOD / 1000.0;
         }
     }
 
@@ -928,12 +760,12 @@ int main(int argc, char *argv[]) {
 
     // 非周期性指標の分析
     elapsedTime = timeGetTime();
-    residualSpecgramIndex = (int *) malloc(sizeof(int) * tLen);
+    residualSpecgramIndex = (int*)malloc(sizeof(int) * tLen);
 
     pCount = pt101(x, signalLen, fs, t, f0, &residualSpecgram, &residualSpecgramLength, residualSpecgramIndex);
     printf("PLATINUM: %d [msec]\n", timeGetTime() - elapsedTime);
 
-//Flag_g適用
+    //Flag_g適用
     if (flag_g != 0) {
         gFactor(pCount, fftl, residualSpecgram, residualSpecgramLength, gRatio);
     }
@@ -946,30 +778,31 @@ int main(int argc, char *argv[]) {
     double velocity;
     double vRatio;
 
-    inputLengthMsec = (int) (tLen * FRAMEPERIOD);//原音の使用可能な長さ
-    lengthMsec = atoi(argv[7]);               //要求長
-    stLengthMsec = atoi(argv[8]);             //子音部
-    velocity = (double) atoi(argv[4]);         //子音速度
-    vRatio = pow(2.0, (1.0 - (velocity / 100.0))); //子音伸縮率
+    inputLengthMsec = (int)(tLen * FRAMEPERIOD);    //原音の使用可能な長さ
+    lengthMsec = atoi(argv[7]);                     //要求長
+    stLengthMsec = atoi(argv[8]);                   //子音部
+    velocity = (double)atoi(argv[4]);               //子音速度
+    vRatio = pow(2.0, (1.0 - (velocity / 100.0)));  //子音伸縮率
 
     // 制御パラメタのメモリ確保
-    double *fixedF0;
-    int *fixedResidualSpecgramIndex;
-    double *fixedVolume;         //フレーム単位のボリューム
+    double* fixedF0;
+    int* fixedResidualSpecgramIndex;
+    double* fixedVolume;  //フレーム単位のボリューム
 
     int tLen2;
 
-    tLen2 = (int) (0.5 + (double) (lengthMsec) / FRAMEPERIOD);
+    tLen2 = (int)(0.5 + (double)(lengthMsec) / FRAMEPERIOD);
 
-    fixedF0 = (double *) malloc(sizeof(double) * tLen2);
-    fixedResidualSpecgramIndex = (int *) malloc(sizeof(int) * tLen2);
-    fixedVolume = (double *) malloc(sizeof(double) * tLen2);
+    fixedF0 = (double*)malloc(sizeof(double) * tLen2);
+    fixedResidualSpecgramIndex = (int*)malloc(sizeof(int) * tLen2);
+    fixedVolume = (double*)malloc(sizeof(double) * tLen2);
 
     // 最終波形のメモリ確保
     int signalLen2;
-    signalLen2 = (int) ((lengthMsec) / 1000.0 * (double) fs);
-    y = (double *) malloc(sizeof(double) * signalLen2);
-    for (i = 0; i < signalLen2; i++) y[i] = 0.0;
+    signalLen2 = (int)((lengthMsec) / 1000.0 * (double)fs);
+    y = (double*)malloc(sizeof(double) * signalLen2);
+    for (i = 0; i < signalLen2; i++)
+        y[i] = 0.0;
 
     // 合成の前にF0の操作 (引数)
     equalizingPicth(f0, tLen, argv[3], atoi(argv[11]), flag_t);
@@ -982,24 +815,24 @@ int main(int argc, char *argv[]) {
 
     tLen2 = stretchTime(f0, tLen, fftl, residualSpecgramIndex,
                         fixedF0, tLen2, fixedResidualSpecgramIndex,
-                        os / (int) FRAMEPERIOD, st / (int) FRAMEPERIOD, min(ed / (int) FRAMEPERIOD, tLen - 1),
+                        os / (int)FRAMEPERIOD, st / (int)FRAMEPERIOD, min(ed / (int)FRAMEPERIOD, tLen - 1),
                         lengthMsec, vRatio, flag_e);
 
     //ピッチベンド適用 world4utauの処理を流用
-    int *pit = nullptr;
+    int* pit = nullptr;
     double tempo = 120;
     int pLen = tLen2;
     int pStep = 256;
     if (argc > 13) {
         cp = argv[12];
         sscanf(cp + 1, "%lf", &tempo);
-        pStep = (int) (60.0 / 96.0 / tempo * fs + 0.5);
+        pStep = (int)(60.0 / 96.0 / tempo * fs + 0.5);
         pLen = signalLen2 / pStep + 1;
-        pit = (int *) malloc((pLen + 1) * sizeof(int));
+        pit = (int*)malloc((pLen + 1) * sizeof(int));
         memset(pit, 0, (pLen + 1) * sizeof(int));
         decpit(argv[13], pit, pLen);
     } else {
-        pit = (int *) malloc((pLen + 1) * sizeof(int));
+        pit = (int*)malloc((pLen + 1) * sizeof(int));
         memset(pit, 0, (pLen + 1) * sizeof(int));
     }
 
@@ -1009,9 +842,10 @@ int main(int argc, char *argv[]) {
     for (i = 0; i < tLen2; i++) {
         tmo = FRAMEPERIOD * i;
         u = tmo * 0.001 * fs / pStep;
-        m = (int) floor(u);
+        m = (int)floor(u);
         u -= m;
-        if (m >= pLen) m = pLen - 1;
+        if (m >= pLen)
+            m = pLen - 1;
         fixedF0[i] *= pow(2, (pit[m] * (1.0 - u) + pit[m + 1] * u) / 1200.0);
     }
 
@@ -1035,11 +869,12 @@ int main(int argc, char *argv[]) {
     printf("WORLD: %d [msec]\n", timeGetTime() - elapsedTime);
 
     //イコライジング
-    int equfftL = 1024;//イコライザーのfft長
-    int equLen = (signalLen2 / (equfftL / 2)) - 1; //繰り返し回数
-    fft_complex **waveSpecgram;  //スペクトル
-    waveSpecgram = (fft_complex **) malloc(sizeof(fft_complex *) * equLen);
-    for (i = 0; i < equLen; i++) waveSpecgram[i] = (fft_complex *) malloc(sizeof(fft_complex) * (equfftL / 2 + 1));
+    int equfftL = 1024;                             //イコライザーのfft長
+    int equLen = (signalLen2 / (equfftL / 2)) - 1;  //繰り返し回数
+    fft_complex** waveSpecgram;                     //スペクトル
+    waveSpecgram = (fft_complex**)malloc(sizeof(fft_complex*) * equLen);
+    for (i = 0; i < equLen; i++)
+        waveSpecgram[i] = (fft_complex*)malloc(sizeof(fft_complex) * (equfftL / 2 + 1));
 
     //スペクトル作成
     if (flag_B > 50 || flag_O != 0) {
@@ -1063,28 +898,30 @@ int main(int argc, char *argv[]) {
 
     // ファイルの書き出し (内容には関係ないよ)
     char header[44];
-    short *output;
+    short* output;
     double maxAmp;
-    output = (short *) malloc(sizeof(short) * signalLen2);
+    output = (short*)malloc(sizeof(short) * signalLen2);
 
     // 振幅の正規化
     maxAmp = 0.0;
     double volume;
-    volume = (double) atoi(argv[10]) / 100.0;
-    for (i = 0; i < signalLen2; i++) maxAmp = maxAmp < fabs(y[i]) ? fabs(y[i]) : maxAmp;
-    for (i = 0; i < signalLen2; i++) output[i] = (short) (32768.0 * (y[i] * 0.5 * volume / maxAmp));
+    volume = (double)atoi(argv[10]) / 100.0;
+    for (i = 0; i < signalLen2; i++)
+        maxAmp = maxAmp < fabs(y[i]) ? fabs(y[i]) : maxAmp;
+    for (i = 0; i < signalLen2; i++)
+        output[i] = (short)(32768.0 * (y[i] * 0.5 * volume / maxAmp));
 
     fp = fopen(argv[1], "rb");
     size_t result =
-            fread(header, sizeof(char), 22, fp);
+        fread(header, sizeof(char), 22, fp);
     assert(result == 22);
     fclose(fp);
 
-    *((short int *) (&header[22])) = 1;        //channels	 	2 	チャンネル数
-    *((int *) (&header[24])) = fs;            //samplerate 	4 	サンプル数/秒
-    *((int *) (&header[28])) = fs * nbit / 8;    //bytepersec 	4 	バイト数/秒
-    *((short int *) (&header[32])) = nbit / 8;//blockalign 	2 	バイト数/ブロック
-    *((short int *) (&header[34])) = nbit;    //bitswidth 	2 	ビット数/サンプル
+    *((short int*)(&header[22])) = 1;         //channels	 	2 	チャンネル数
+    *((int*)(&header[24])) = fs;              //samplerate 	4 	サンプル数/秒
+    *((int*)(&header[28])) = fs * nbit / 8;   //bytepersec 	4 	バイト数/秒
+    *((short int*)(&header[32])) = nbit / 8;  //blockalign 	2 	バイト数/ブロック
+    *((short int*)(&header[34])) = nbit;      //bitswidth 	2 	ビット数/サンプル
 
     header[36] = 'd';
     header[37] = 'a';
@@ -1115,7 +952,8 @@ int main(int argc, char *argv[]) {
     free(residualSpecgramIndex);
     free(residualSpecgramLength);
 
-    for (i = 0; i < equLen; i++) free(waveSpecgram[i]);
+    for (i = 0; i < equLen; i++)
+        free(waveSpecgram[i]);
     free(waveSpecgram);
 
     printf("complete.\n");
